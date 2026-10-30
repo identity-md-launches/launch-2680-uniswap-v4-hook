@@ -11,6 +11,13 @@ Implementation self-review against the pinned security, address and L2 inputs. T
 - `rangeSigma * sigma8` and `triggerSigma * sigma8` are `uint256` products of a `uint8` and a value at most `8 * 887272`; no overflow is possible. `lastRebalance + cooldown` is a `uint256` sum with a `uint32` addend.
 - The hook runtime sits 200 bytes under EIP-170; the size test in `SigmaHook.t.sol` and the protected floor both assert the limit.
 
+## Salt mining tool
+
+- `script/MineSalt.s.sol` is a simulation-only contract: it embeds the hook creation code as a constant, which puts it above the EIP-170 size limit, and it must never be deployed on chain. It holds no key, reads no environment and sends no transaction; `forge script` executes it locally and prints the result.
+- The search predicate is the low 16 bits of the address equal to `0x1040`, stricter than v4's 14-bit `validateHookPermissions`. Any accepted salt passes the hook constructor's own check; any unmined salt makes the constructor revert `HookAddressNotValid`, so a wrong salt cannot produce a live hook with wrong flags. A failed window reverts `SearchExhausted` rather than returning a guess.
+- The salt is a function of the deployer, the bytecode and the four constructor values. The owner is not in this repository and is passed as the argument; the deployer is assumed to be the launch factory and so also fills `factory_`. Both are documented as assumptions in the README and either can be overridden through `mineWith`.
+- The tool cannot see the chain. The deployer must confirm the predicted address is empty and that the pinned PoolManager and token addresses still match the live chain before sending the deployment. `test/helpers/Create2Factory.sol` exists only so tests can run a CREATE2 from the deployer's address; it is not part of the deliverable's deployment path.
+
 ## Fund boundaries
 
 - The immutable manager and bound pool are the only strategy venue. Callback identity and the outstanding-unlock latch are checked. Own hook swaps skip callbacks under the vendored v4 dispatch rules. All operations finish with zero manager currency deltas.

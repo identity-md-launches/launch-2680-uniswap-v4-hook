@@ -222,7 +222,7 @@ contract AdversarialTest is Fixture {
         MineSalt miner = MineSalt(deployCode("MineSalt.s.sol:MineSalt"));
         address newOwner = makeAddr("newOwner");
         (bytes32 salt, address predicted) =
-            miner.run(address(this), manager, newOwner, address(token), address(this), 0, 200_000);
+            miner.mineWith(address(this), manager, newOwner, address(token), address(this), 0, 1 << 22);
         SigmaHook deployed = _createHook(
             bytes.concat(
                 vm.getCode("SigmaHook.sol:SigmaHook"), abi.encode(manager, newOwner, address(token), address(this))
@@ -232,6 +232,6 @@ contract AdversarialTest is Fixture {
         assertEq(address(deployed), predicted);
         assertEq(deployed.owner(), newOwner);
         vm.expectRevert(MineSalt.SearchExhausted.selector);
-        miner.run(address(this), manager, newOwner, address(token), address(this), 0, 0);
+        miner.mineWith(address(this), manager, newOwner, address(token), address(this), 0, 0);
     }
 }
