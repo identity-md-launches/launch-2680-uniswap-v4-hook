@@ -1,0 +1,64 @@
+[
+  {
+    "repository": "https://github.com/Uniswap/v4-core",
+    "commit": "bea7f6d1c11cd5dc4f0d5151ffa37a1c239feee6",
+    "path": "lib/v4-core",
+    "archive_sha256": "006184110dd9af72e11035abf9b64ae0bfaa6d1a3771c7b8d57b8f310591d972",
+    "included": [
+      "src/",
+      "licenses/"
+    ]
+  },
+  {
+    "repository": "https://github.com/Uniswap/v4-periphery",
+    "commit": "c6e4754dab11bd38c6f08ac51c3c868569e93d64",
+    "path": "lib/v4-periphery",
+    "archive_sha256": "83c6d12cd0d9dfc49e2a022e06c0618670f19eee861ea68c9c0d9003a6b7aa82",
+    "included": [
+      "src/base/ImmutableState.sol",
+      "src/interfaces/IImmutableState.sol",
+      "src/libraries/LiquidityAmounts.sol",
+      "LICENSE"
+    ]
+  },
+  {
+    "repository": "https://github.com/Uniswap/v4-hooks-public",
+    "commit": "82de6aa6de5c3e387fa5a088af6977f14f66e314",
+    "path": "lib/v4-hooks-public",
+    "archive_sha256": "0bb6e23e483ede2307e29742c724b660ac274e09385a9f8e639806671f4afb2c",
+    "included": [
+      "src/base/BaseHook.sol",
+      "LICENSE"
+    ]
+  },
+  {
+    "repository": "https://github.com/OpenZeppelin/openzeppelin-contracts",
+    "commit": "69c8def5f222ff96f2b5beff05dfba996368aa79",
+    "path": "lib/openzeppelin-contracts",
+    "archive_sha256": "b0d8bc73b249cee906d596cf8e63c6ea71a4311c4e2a45a0b253e060d6dd3ae8",
+    "included": [
+      "contracts/",
+      "LICENSE"
+    ]
+  },
+  {
+    "repository": "https://github.com/foundry-rs/forge-std",
+    "commit": "77041d2ce690e692d6e03cc812b57d1ddaa4d505",
+    "path": "lib/forge-std",
+    "archive_sha256": "a387f7c2a10387f889b0d18b999cfa667a5273ac11cc11e18923022eb8b24bc3",
+    "included": [
+      "src/",
+      "LICENSE"
+    ]
+  },
+  {
+    "repository": "https://github.com/transmissions11/solmate",
+    "commit": "89365b880c4f3c786bdd453d4b8e8fe410344a69",
+    "path": "lib/solmate",
+    "archive_sha256": "8a823fec83181106fdae58528f20203b7563aceaf077fc317f01ae18a229f235",
+    "included": [
+      "src/",
+      "LICENSE"
+    ]
+  }
+]

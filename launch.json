@@ -1,0 +1,29 @@
+{
+  "kind": "univ4_hook",
+  "hook": {
+    "contract": "SigmaHook",
+    "constructorArgs": [
+      "$poolManager",
+      "$owner",
+      "$token",
+      "$factory"
+    ],
+    "permissions": [
+      "afterInitialize",
+      "afterSwap"
+    ]
+  },
+  "token": {
+    "contract": "SigmaToken",
+    "name": "SigmaHook",
+    "symbol": "SHK",
+    "decimals": 18
+  },
+  "pool": {
+    "pairedCurrency": "0x0000000000000000000000000000000000000000",
+    "fee": 12500,
+    "tickSpacing": 60,
+    "initialPrice": "79228162514264337593543950336"
+  },
+  "notes": "SigmaHook v2 is a BaseHook auto-basket for the SHK/native ETH pool. Constructor order is (IPoolManager manager_, address owner_, address launchToken_, address factory_); every address must be non-zero. getHookPermissions enables only afterInitialize and afterSwap; no return-delta flag is set and afterSwap always returns a zero delta. afterInitialize accepts only the launch factory as sender, a single initialization, this hook in the key, the 12500 LP fee, tickSpacing 60, a key containing the launch token, and currencies that are native ETH or a deployed contract; it seeds the 8-slot tick buffer with the launch tick and sets the initial band. afterSwap records the slot0 tick into the circular buffer, and anyone may call flashRebalance(key), which computes the SMA and integer-sqrt standard deviation and, when external shares exist, at least cooldown seconds (owner-set, default 1800) have passed since the last rebalance and the tick deviates from the SMA by more than triggerSigma/10 sigma (owner-set, default 15), burns all basket liquidity, collects principal and fees, balances inventory and redeploys into SMA +/- rangeSigma/10 sigma (owner-set, default 30) rounded to tickSpacing, keeping dust for the next cycle. The owner sets the three parameters within bounds (setTriggerSigma 5-50, setRangeSigma 10-50, setCooldown 300-86400) or loads one of six presets with setMode (SLEEP, STANDARD, AGGRESSIVE, MAX, DEFENSIVE, PAUSED), and may pause()/resume() the trigger. The hook's unlockCallback accepts only the PoolManager and only for an unlock the hook itself started. LPs deposit through the hook and hold its ERC-20 basket receipts (sSHK); 1000 minimum receipts stay locked. There is no separate wrapper contract. The owner (Ownable2Step, renounceOwnership disabled) can activateEmergencyMode, which irreversibly burns all liquidity to raw tokens held by the hook and receives nothing itself; emergencyWithdraw then lets any share holder redeem pro-rata raw tokens without touching the PoolManager, with a partial-amount and alternative-receiver variant. The hook takes no fee of its own; the LP fee is the launch policy's 12500."
+}
