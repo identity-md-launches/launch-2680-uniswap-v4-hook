@@ -20,20 +20,26 @@ import {IPoolManager} from "v4-core/src/interfaces/IPoolManager.sol";
 ///
 ///   forge script script/MineSalt.s.sol --sig "mineFor(address)" <owner>
 ///
-/// The default entrypoint `run()` deliberately reverts `OwnerRequired`, because no salt exists until
-/// the owner is fixed. The full form `mineWith(deployer, manager, owner, token, factory, start,
-/// attempts)` overrides every constant, for another deployer, another chain or a resumed search.
+/// The requester fixed the owner as `OWNER`, so the bare `run()` mines for it and `RECORDED_*` hold the
+/// result of that search for the build in this repository. `verifyRecorded()` recomputes the result from
+/// the current creation code and reverts `ResultStale` when any change has moved the address: run it
+/// before the deployment transaction. The full form `mineWith(deployer, manager, owner, token, factory,
+/// start, attempts)` overrides every constant, for another deployer, another chain or a resumed search.
 contract MineSalt is Script {
     /// @dev No salt in `[start, start + attempts)` yields an address ending in `REQUIRED_SUFFIX`.
     error SearchExhausted();
-    /// @dev `run()` was called without the owner; the hint says which entrypoint to call instead.
-    error OwnerRequired(string hint);
     /// @dev Every address input must be non-zero, as the hook constructor itself requires.
     error ZeroAddress();
+    /// @dev The creation code or the arguments changed since the recorded search: the recorded salt is void.
+    error ResultStale(bytes32 recordedInitCodeHash, bytes32 currentInitCodeHash);
+    /// @dev The salt does not put the given init code at the expected address for this deployer.
+    error AddressMismatch(address expected, address actual);
 
     /// @notice CREATE2 deployer from the brief. It is the contract that executes CREATE2, so it is also
     /// the hook's `factory_` constructor argument (the only caller allowed to bind the pool).
     address public constant DEPLOYER = 0x735121A546092F31050A867FD7E3A750C7B0EFF9;
+    /// @notice Hook owner given by the requester for this search (`owner_` constructor argument).
+    address public constant OWNER = 0xdbeab8243F318F1bBF815d85a8A869def1510b61;
     /// @notice Uniswap v4 PoolManager on Robinhood Chain (chain id 4663), from the pinned project inputs.
     IPoolManager public constant POOL_MANAGER = IPoolManager(0x8366a39CC670B4001A1121B8F6A443A643e40951);
     /// @notice Existing SHK launch token on Robinhood Chain, from the pinned project inputs. Never redeployed.
@@ -49,14 +55,46 @@ contract MineSalt is Script {
     /// @notice One in 65,536 salts matches, so 2^22 attempts fail with probability e^-64.
     uint256 public constant DEFAULT_ATTEMPTS = 1 << 22;
 
-    /// @notice The brief's bare invocation. There is no answer without the owner, so say so.
-    function run() external pure {
-        revert OwnerRequired("the CREATE2 address depends on the hook owner; run: forge script script/MineSalt.s.sol --sig \"mineFor(address)\" <owner>");
+    /// @notice Result of `mineFor(OWNER)` for the creation code built from this repository with the pinned
+    /// settings (solc 0.8.26, via-IR, 200 runs, Cancun, no metadata hash) and the constants above. Any
+    /// change to the hook source, its imports, the compiler settings or the arguments voids all three.
+    bytes32 public constant RECORDED_SALT = 0x00000000000000000000000000000000000000000000000000000000000075db;
+    address public constant RECORDED_ADDRESS = 0x0E19960828C6f198713e97C0039D589a5b0f1040;
+    bytes32 public constant RECORDED_INIT_CODE_HASH =
+        0xad1d60e3f24ffe14b9ec5816c251dcdd918e6f52b5c441024b1b1f58ca49cb96;
+
+    /// @notice The bare invocation: mine for the requester's owner with every other input from the constants.
+    function run() external pure returns (bytes32 salt, address predicted) {
+        return mineFor(OWNER);
     }
 
     /// @notice Mine for the brief's deployer, PoolManager and token with the given hook owner.
-    function mineFor(address owner) external pure returns (bytes32 salt, address predicted) {
+    function mineFor(address owner) public pure returns (bytes32 salt, address predicted) {
         return mineWith(DEPLOYER, POOL_MANAGER, owner, LAUNCH_TOKEN, DEPLOYER, 0, DEFAULT_ATTEMPTS);
+    }
+
+    /// @notice Pre-deployment check: the recorded salt still places the current build at the recorded address.
+    /// Reverts `ResultStale` when the creation code or arguments changed and `AddressMismatch` when the salt
+    /// no longer maps to the address; returns the address when everything agrees.
+    function verifyRecorded() external pure returns (address) {
+        bytes32 hash = initCodeHash(POOL_MANAGER, OWNER, LAUNCH_TOKEN, DEPLOYER);
+        address predicted = check(DEPLOYER, hash, RECORDED_INIT_CODE_HASH, RECORDED_SALT, RECORDED_ADDRESS);
+        console.log("VERIFIED SALT:", vm.toString(RECORDED_SALT));
+        console.log("VERIFIED ADDRESS:", vm.toString(predicted));
+        console.log("VERIFIED INIT_CODE_HASH:", vm.toString(hash));
+        return predicted;
+    }
+
+    /// @notice Generic form of `verifyRecorded`: `currentHash` must equal `recordedHash`, and `salt` must map
+    /// `currentHash` to `expected` for `deployer` with the required suffix.
+    function check(address deployer, bytes32 currentHash, bytes32 recordedHash, bytes32 salt, address expected)
+        public
+        pure
+        returns (address predicted)
+    {
+        if (currentHash != recordedHash) revert ResultStale(recordedHash, currentHash);
+        predicted = predict(deployer, salt, currentHash);
+        if (predicted != expected || !hasSuffix(predicted)) revert AddressMismatch(expected, predicted);
     }
 
     /// @notice Fully parameterised search. `deployer` is the account that executes CREATE2, not the EOA

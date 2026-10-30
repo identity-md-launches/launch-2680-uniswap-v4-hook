@@ -107,32 +107,42 @@ A CREATE2 address is `keccak256(0xff ‖ deployer ‖ salt ‖ keccak256(initCod
 | `factory_` constructor argument | same as the deployer | assumption: the contract that runs CREATE2 is the launch factory that later binds the pool |
 | `manager_` | `0x8366a39CC670B4001A1121B8F6A443A643e40951` | pinned project input, Robinhood Chain 4663 |
 | `launchToken_` | `0x4fE865Ad3b3eF64B2af9C38c78aBf5C6e68C1164` | pinned project input, the existing SHK token |
-| `owner_` | **argument**, no default | only the requester knows the hook owner |
+| `owner_` | `0xdbeab8243F318F1bBF815d85a8A869def1510b61` (`OWNER`) | the requester's follow-up brief; `mineFor(<owner>)` overrides it |
 | Required address suffix | low 16 bits `== 0x1040` | the brief; implies the v4 flags `afterInitialize ‖ afterSwap` |
 
 Uniswap v4 validates only the low 14 bits of a hook address, so `0x5040`, `0x9040` and `0xD040` endings would also pass `validateHookPermissions`. The brief asks for an address that ends in `0x1040`, so the search requires the full low 16 bits, which is stricter and takes about 65,536 attempts on average (around 7M gas in the simulation). The window is `2^22` attempts, which fails with probability e^-64; a failed window reverts `SearchExhausted`, never returns a wrong salt.
 
-Run, with the hook owner's address:
+Run, with the hook owner's address (the bare `forge script script/MineSalt.s.sol` is the same search for the recorded `OWNER`):
 
 ```sh
 forge build
-forge script script/MineSalt.s.sol --sig "mineFor(address)" <owner>
+forge script script/MineSalt.s.sol --sig "mineFor(address)" 0xdbeab8243F318F1bBF815d85a8A869def1510b61
 ```
 
-Output (the two lines the brief asks for, plus the values to cross-check in the deployment transaction):
+### Recorded result
+
+Output of that command for the creation code built from this commit, also stored in [`docs/create2-salt.json`](docs/create2-salt.json) and as the `RECORDED_*` constants of the script:
 
 ```
-SALT: 0x…
-ADDRESS: 0x…1040
-INIT_CODE_HASH: 0x…
+SALT: 0x00000000000000000000000000000000000000000000000000000000000075db
+ADDRESS: 0x0E19960828C6f198713e97C0039D589a5b0f1040
+INIT_CODE_HASH: 0xad1d60e3f24ffe14b9ec5816c251dcdd918e6f52b5c441024b1b1f58ca49cb96
 DEPLOYER: 0x735121A546092F31050A867FD7E3A750C7B0EFF9
 CONSTRUCTOR manager: 0x8366a39CC670B4001A1121B8F6A443A643e40951
-CONSTRUCTOR owner: <owner>
+CONSTRUCTOR owner: 0xdbeab8243F318F1bBF815d85a8A869def1510b61
 CONSTRUCTOR launchToken: 0x4fE865Ad3b3eF64B2af9C38c78aBf5C6e68C1164
 CONSTRUCTOR factory: 0x735121A546092F31050A867FD7E3A750C7B0EFF9
 ```
 
-The bare `forge script script/MineSalt.s.sol` (with or without `--private-key`) reverts `OwnerRequired` with the command above in the message: without the owner there is no answer to print. A signing key is never needed; the script reads nothing from it. The full form overrides every constant for another deployer, another chain or a resumed search:
+The salt is the lowest that works (`0x75db` = 30,171 attempts; the tests prove every lower salt fails). It is valid only for this exact creation code, these four constructor values and this deployer: any change to the hook source, its imports, the compiler settings or an argument changes `INIT_CODE_HASH` and voids the salt. Before the deployment transaction, check that the build at hand still produces the recorded result:
+
+```sh
+forge script script/MineSalt.s.sol --sig "verifyRecorded()"
+```
+
+It prints the three verified values, or reverts `ResultStale(recordedHash, currentHash)` when the creation code or arguments changed, or `AddressMismatch` when the salt no longer maps to the recorded address. After a change, re-run the mining command and refresh the `RECORDED_*` constants, `docs/create2-salt.json` and this section together; `test/MineSalt.t.sol` fails until they agree with the build.
+
+A signing key is never needed; the script reads nothing from it and sends nothing. The full form overrides every constant for another deployer, another owner, another chain or a resumed search:
 
 ```sh
 forge script script/MineSalt.s.sol \
@@ -143,8 +153,9 @@ forge script script/MineSalt.s.sol \
 Operational rules for whoever deploys:
 
 - **Deployer identity.** `DEPLOYER` must be the account whose `CREATE2` opcode runs: the factory contract, not the EOA signing the transaction and not a transient script contract. If `0x7351…EFF9` is an EOA, it cannot deploy with CREATE2 at all; mine with the factory it will call.
-- **Exact arguments.** Pass to CREATE2 the bytes printed as `INIT_CODE_HASH`'s preimage: the artifact `out/SigmaHook.sol/SigmaHook.json` creation code built from this commit with the pinned settings (solc 0.8.26, via-IR, 200 runs, Cancun, no metadata hash) plus `abi.encode(manager, owner, launchToken, factory)` with exactly the values printed. A different compiler, setting, owner, manager, token or factory yields a different address, which the hook constructor then rejects with `HookAddressNotValid` if its flags no longer match.
-- **Address must be empty.** This repository is offline and cannot check the chain. Before deploying, confirm the printed address has no code on Robinhood Chain; if it is occupied, re-run with `mineWith` and a `startSalt` one above the printed salt.
+- **Exact arguments.** Pass to CREATE2 the bytes printed as `INIT_CODE_HASH`'s preimage: the `SigmaHook.sol/SigmaHook.json` artifact's creation code in Foundry's output directory (`out/` by default) built from this commit with the pinned settings (solc 0.8.26, via-IR, 200 runs, Cancun, no metadata hash) plus `abi.encode(manager, owner, launchToken, factory)` with exactly the values printed. A different compiler, setting, owner, manager, token or factory yields a different address, which the hook constructor then rejects with `HookAddressNotValid` if its flags no longer match.
+- **Address must be empty.** This repository does not query the chain. Before deploying, confirm `0x0E19960828C6f198713e97C0039D589a5b0f1040` has no code on Robinhood Chain; if it is occupied, re-run with `mineWith` and a `startSalt` of `0x75dc` (one above the recorded salt).
+- **Owner identity.** `0xdbeab8243F318F1bBF815d85a8A869def1510b61` becomes the hook's `Ownable2Step` owner with the parameter setters, pause and the irreversible emergency exit. It is taken from the brief as given, unverified; if the launch names a different owner, mine again with `mineFor(<owner>)` because the address moves with it.
 - **Pinned inputs, not verified addresses.** The PoolManager and token constants are the project's recorded inputs. Confirm them against the live chain before the deployment transaction; if either differs, mine again with `mineWith`.
 - **Nothing is deployed here.** The script, its tests and this document authorise no transaction. Deployment and the pool binding remain the launch's responsibility, after the independent review.
 
@@ -158,7 +169,7 @@ The network input marks `extendedSwapParams: true`, while the vendored core uses
 
 - **Mode:** the hook starts at the v1 defaults (15 / 30 / 1800). The owner calls `setMode(m)` with the preset that matches the intended risk posture, or the individual setters within their bounds. `pause()` stops keeper rebalances without touching the range or cooldown; `resume()` restores the 1.5σ trigger. No value here is secret or external: the owner picks it.
 - **Optional WETH source:** owner calls `setWETH(verifiedWrappedEtherAddress)` once, only if WETH-source ETH reception is needed. The supplied network inputs contain no WETH address, so none is invented. Until configured, only the PoolManager may send ETH through `receive()`.
-- **Salt:** mine it with `forge script script/MineSalt.s.sol --sig "mineFor(address)" <owner>` once the owner is fixed, confirm the printed address is empty on chain, and deploy from `0x735121A546092F31050A867FD7E3A750C7B0EFF9` with exactly the printed constructor values. Re-mine after any change to the hook source, compiler settings or arguments.
+- **Salt:** recorded for owner `0xdbeab8243F318F1bBF815d85a8A869def1510b61` as salt `0x…75db`, address `0x0E19960828C6f198713e97C0039D589a5b0f1040`, init code hash `0xad1d…cb96` (see [Recorded result](#recorded-result) and `docs/create2-salt.json`). Run `forge script script/MineSalt.s.sol --sig "verifyRecorded()"` on the build you deploy, confirm the address is empty on chain, and deploy from `0x735121A546092F31050A867FD7E3A750C7B0EFF9` with exactly the recorded constructor values. Re-mine after any change to the hook source, compiler settings or arguments.
 - **Operator:** verify constructor arguments, hook flags, `poolKey()`, `math()` and `burnSink()`; verify Cancun and manager ABI compatibility, factory initialization, fee/spacing and currency order. Publish the new hook address separately from the historical deployment. Never redeploy or re-mint SHK.
 - **Keepers:** read `triggerSigma()`, `rangeSigma()`, `cooldown()` and `lastRebalance()` rather than assuming constants; simulate `flashRebalance(key)` and submit when eligible. Gas is the keeper's expense; the 1% bounty does not guarantee profit. Monitor `ModeChanged`, `InvestmentDeferred` and `BuybackDeferred`.
 - **Owner:** operate the two-step ownership transfer, the parameter setters and the irreversible emergency exit, and rescue only stray ETH. Emergency activation collects all pool assets, cancels unexecuted fee allocations back to LPs, and pays the owner nothing; thereafter holders redeem raw assets without the manager.

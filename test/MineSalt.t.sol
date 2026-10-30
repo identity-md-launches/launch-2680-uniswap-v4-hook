@@ -15,6 +15,11 @@ contract MineSaltTest is Test {
     address internal constant BRIEF_DEPLOYER = 0x735121A546092F31050A867FD7E3A750C7B0EFF9;
     address internal constant BRIEF_MANAGER = 0x8366a39CC670B4001A1121B8F6A443A643e40951;
     address internal constant BRIEF_TOKEN = 0x4fE865Ad3b3eF64B2af9C38c78aBf5C6e68C1164;
+    /// @dev Hook owner the requester gave for the recorded search, and the three values it produced.
+    address internal constant BRIEF_OWNER = 0xdbeab8243F318F1bBF815d85a8A869def1510b61;
+    bytes32 internal constant BRIEF_SALT = bytes32(uint256(0x75db));
+    address internal constant BRIEF_ADDRESS = 0x0E19960828C6f198713e97C0039D589a5b0f1040;
+    bytes32 internal constant BRIEF_INIT_CODE_HASH = 0xad1d60e3f24ffe14b9ec5816c251dcdd918e6f52b5c441024b1b1f58ca49cb96;
     uint256 internal constant ATTEMPTS = 1 << 22;
 
     MineSalt internal miner;
@@ -47,6 +52,10 @@ contract MineSaltTest is Test {
 
     function test_constantsMatchBriefAndHookPermissions() public view {
         assertEq(miner.DEPLOYER(), BRIEF_DEPLOYER);
+        assertEq(miner.OWNER(), BRIEF_OWNER);
+        assertEq(miner.RECORDED_SALT(), BRIEF_SALT);
+        assertEq(miner.RECORDED_ADDRESS(), BRIEF_ADDRESS);
+        assertEq(miner.RECORDED_INIT_CODE_HASH(), BRIEF_INIT_CODE_HASH);
         assertEq(address(miner.POOL_MANAGER()), BRIEF_MANAGER);
         assertEq(miner.LAUNCH_TOKEN(), BRIEF_TOKEN);
         assertEq(miner.CHAIN_ID(), 4663);
@@ -70,6 +79,94 @@ contract MineSaltTest is Test {
         assertFalse(miner.hasSuffix(address(uint160(0x1000))));
         assertFalse(miner.hasSuffix(address(uint160(0x0040))));
         assertFalse(miner.hasSuffix(address(0)));
+    }
+
+    // ---------------------------------------------------------------------------------------------
+    // The recorded result for the requester's owner
+    // ---------------------------------------------------------------------------------------------
+
+    function test_runMinesRecordedSaltForRequesterOwner() public view {
+        (bytes32 salt, address predicted) = miner.run();
+        assertEq(salt, BRIEF_SALT, "SALT");
+        assertEq(predicted, BRIEF_ADDRESS, "ADDRESS");
+        assertEq(_suffix(predicted), 0x1040);
+        (bytes32 salt2, address predicted2) = miner.mineFor(BRIEF_OWNER);
+        assertEq(salt2, salt, "run() is mineFor(OWNER)");
+        assertEq(predicted2, predicted);
+    }
+
+    function test_recordedInitCodeHashMatchesThisBuild() public view {
+        bytes32 fromScript = miner.initCodeHash(IPoolManager(BRIEF_MANAGER), BRIEF_OWNER, BRIEF_TOKEN, BRIEF_DEPLOYER);
+        bytes32 fromArtifact = keccak256(_artifactInitCode(BRIEF_MANAGER, BRIEF_OWNER, BRIEF_TOKEN, BRIEF_DEPLOYER));
+        assertEq(fromScript, BRIEF_INIT_CODE_HASH, "INIT_CODE_HASH recorded for this build");
+        assertEq(fromArtifact, BRIEF_INIT_CODE_HASH, "artifact agrees");
+        assertEq(vm.computeCreate2Address(BRIEF_SALT, BRIEF_INIT_CODE_HASH, BRIEF_DEPLOYER), BRIEF_ADDRESS);
+    }
+
+    function test_verifyRecordedPassesForThisBuild() public view {
+        assertEq(miner.verifyRecorded(), BRIEF_ADDRESS);
+    }
+
+    function test_recordedSaltIsTheLowestForRequesterOwner() public {
+        vm.expectRevert(MineSalt.SearchExhausted.selector);
+        miner.mine(BRIEF_DEPLOYER, BRIEF_INIT_CODE_HASH, 0, uint256(BRIEF_SALT));
+        (bytes32 exact, address at) = miner.mine(BRIEF_DEPLOYER, BRIEF_INIT_CODE_HASH, uint256(BRIEF_SALT), 1);
+        assertEq(exact, BRIEF_SALT);
+        assertEq(at, BRIEF_ADDRESS);
+    }
+
+    function test_recordedSaltDeploysHookOwnedByRequester() public {
+        assertEq(BRIEF_ADDRESS.code.length, 0, "fresh address");
+        address deployed = factoryAtDeployer.deploy(
+            miner.initCode(IPoolManager(BRIEF_MANAGER), BRIEF_OWNER, BRIEF_TOKEN, BRIEF_DEPLOYER), BRIEF_SALT
+        );
+        assertEq(
+            deployed, BRIEF_ADDRESS, "CREATE2 from 0x7351...EFF9 with the recorded salt lands on the recorded address"
+        );
+        SigmaHook hook = SigmaHook(payable(deployed));
+        assertEq(hook.owner(), BRIEF_OWNER);
+        assertEq(hook.factory(), BRIEF_DEPLOYER);
+        assertEq(hook.launchToken(), BRIEF_TOKEN);
+        assertEq(address(hook.poolManager()), BRIEF_MANAGER);
+        Hooks.validateHookPermissions(IHooks(deployed), hook.getHookPermissions());
+        assertTrue(Hooks.hasPermission(IHooks(deployed), Hooks.AFTER_INITIALIZE_FLAG));
+        assertTrue(Hooks.hasPermission(IHooks(deployed), Hooks.AFTER_SWAP_FLAG));
+    }
+
+    function test_recordedSaltDoesNotServeAnotherOwnerOrDeployer() public {
+        bytes32 otherOwnerHash =
+            miner.initCodeHash(IPoolManager(BRIEF_MANAGER), makeAddr("someoneElse"), BRIEF_TOKEN, BRIEF_DEPLOYER);
+        assertTrue(otherOwnerHash != BRIEF_INIT_CODE_HASH);
+        address moved = miner.predict(BRIEF_DEPLOYER, BRIEF_SALT, otherOwnerHash);
+        assertTrue(moved != BRIEF_ADDRESS);
+        assertFalse(miner.hasSuffix(moved), "the recorded salt is bound to the requester's owner");
+        address elsewhere = miner.predict(makeAddr("otherDeployer"), BRIEF_SALT, BRIEF_INIT_CODE_HASH);
+        assertTrue(elsewhere != BRIEF_ADDRESS);
+        assertFalse(miner.hasSuffix(elsewhere), "and to the deployer");
+    }
+
+    function test_checkRejectsStaleInitCode() public {
+        bytes32 changed = keccak256(bytes.concat(bytes32(BRIEF_INIT_CODE_HASH), hex"01"));
+        vm.expectRevert(abi.encodeWithSelector(MineSalt.ResultStale.selector, BRIEF_INIT_CODE_HASH, changed));
+        miner.check(BRIEF_DEPLOYER, changed, BRIEF_INIT_CODE_HASH, BRIEF_SALT, BRIEF_ADDRESS);
+    }
+
+    function test_checkRejectsWrongSaltOrAddress() public {
+        bytes32 wrongSalt = bytes32(uint256(BRIEF_SALT) + 1);
+        address actual = miner.predict(BRIEF_DEPLOYER, wrongSalt, BRIEF_INIT_CODE_HASH);
+        vm.expectRevert(abi.encodeWithSelector(MineSalt.AddressMismatch.selector, BRIEF_ADDRESS, actual));
+        miner.check(BRIEF_DEPLOYER, BRIEF_INIT_CODE_HASH, BRIEF_INIT_CODE_HASH, wrongSalt, BRIEF_ADDRESS);
+
+        address wrongExpected = address(uint160(BRIEF_ADDRESS) ^ (1 << 100));
+        vm.expectRevert(abi.encodeWithSelector(MineSalt.AddressMismatch.selector, wrongExpected, BRIEF_ADDRESS));
+        miner.check(BRIEF_DEPLOYER, BRIEF_INIT_CODE_HASH, BRIEF_INIT_CODE_HASH, BRIEF_SALT, wrongExpected);
+
+        // A consistent (salt, address) pair whose address lacks the suffix is refused even when it matches.
+        address noSuffix = miner.predict(BRIEF_DEPLOYER, wrongSalt, BRIEF_INIT_CODE_HASH);
+        if (!miner.hasSuffix(noSuffix)) {
+            vm.expectRevert(abi.encodeWithSelector(MineSalt.AddressMismatch.selector, noSuffix, noSuffix));
+            miner.check(BRIEF_DEPLOYER, BRIEF_INIT_CODE_HASH, BRIEF_INIT_CODE_HASH, wrongSalt, noSuffix);
+        }
     }
 
     // ---------------------------------------------------------------------------------------------
@@ -191,16 +288,6 @@ contract MineSaltTest is Test {
     // ---------------------------------------------------------------------------------------------
     // Failure paths
     // ---------------------------------------------------------------------------------------------
-
-    function test_runWithoutOwnerReverts() public {
-        vm.expectRevert(
-            abi.encodeWithSelector(
-                MineSalt.OwnerRequired.selector,
-                "the CREATE2 address depends on the hook owner; run: forge script script/MineSalt.s.sol --sig \"mineFor(address)\" <owner>"
-            )
-        );
-        miner.run();
-    }
 
     function test_zeroOwnerReverts() public {
         vm.expectRevert(MineSalt.ZeroAddress.selector);

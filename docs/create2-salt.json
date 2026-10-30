@@ -1,0 +1,38 @@
+{
+  "job": "Mine CREATE2 salt for SigmaHook",
+  "command": "forge script script/MineSalt.s.sol --sig \"mineFor(address)\" 0xdbeab8243F318F1bBF815d85a8A869def1510b61",
+  "verify": "forge script script/MineSalt.s.sol --sig \"verifyRecorded()\"",
+  "result": {
+    "SALT": "0x00000000000000000000000000000000000000000000000000000000000075db",
+    "ADDRESS": "0x0E19960828C6f198713e97C0039D589a5b0f1040",
+    "INIT_CODE_HASH": "0xad1d60e3f24ffe14b9ec5816c251dcdd918e6f52b5c441024b1b1f58ca49cb96"
+  },
+  "create2": {
+    "deployer": "0x735121A546092F31050A867FD7E3A750C7B0EFF9",
+    "formula": "keccak256(0xff ++ deployer ++ salt ++ keccak256(initCode))[12:]",
+    "initCode": "SigmaHook creation code from the SigmaHook.sol/SigmaHook.json artifact in Foundry's output directory, built at this commit ++ abi.encode(manager, owner, launchToken, factory)",
+    "requiredSuffix": "0x1040",
+    "hookFlags": ["afterInitialize", "afterSwap"]
+  },
+  "constructorArgs": {
+    "manager_": "0x8366a39CC670B4001A1121B8F6A443A643e40951",
+    "owner_": "0xdbeab8243F318F1bBF815d85a8A869def1510b61",
+    "launchToken_": "0x4fE865Ad3b3eF64B2af9C38c78aBf5C6e68C1164",
+    "factory_": "0x735121A546092F31050A867FD7E3A750C7B0EFF9"
+  },
+  "build": {
+    "solc": "0.8.26",
+    "evm_version": "cancun",
+    "optimizer": true,
+    "optimizer_runs": 200,
+    "via_ir": true,
+    "bytecode_hash": "none"
+  },
+  "chain": {
+    "name": "Robinhood Chain",
+    "chainId": 4663,
+    "note": "Context only: CREATE2 addresses do not depend on the chain id. The address was not checked for existing code on chain; the deployer must do so before sending the transaction."
+  },
+  "validity": "The salt is valid only for this exact creation code and these exact four constructor values from this deployer. Any change to the hook source, its imports, the compiler settings or an argument changes INIT_CODE_HASH and voids the salt; re-run the command and verifyRecorded() reverts ResultStale until the recorded values are refreshed.",
+  "deployed": false
+}
