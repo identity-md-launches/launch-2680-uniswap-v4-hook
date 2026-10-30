@@ -6,7 +6,7 @@ Solidity 0.8.26 / Cancun Foundry project. `SigmaHook` manages one Uniswap v4 pos
 
 ```sh
 forge build
-FOUNDRY_FUZZ_SEED=0x8e51b61561d782ae6da4336bbfca7a992dab30632683eb25cb82218c4f97b39f forge test
+FOUNDRY_FUZZ_SEED=0xc84cd5248922f87e15fc9a5277917df94609ac4718540c324edc66cc0c98531b forge test
 forge fmt --check
 ```
 
@@ -29,6 +29,7 @@ With the defaults every formula reduces exactly to v1: `10·d > 15·s ⇔ 2·d >
 
 | Contract | Responsibility | Units |
 | --- | --- | --- |
+| `DeployFactory` | Owner-operated CREATE2 deployment and pool creation; no constructor arguments | Fixed initial owner, immutable hook creation code |
 | `SigmaToken` | Existing fixed-supply SHK launch token | SHK base units |
 | `SigmaHook` | Pool position, idle balances/claims, basket entry/exit, statistics, keeper fee pipeline, operator parameters | `sSHK` basket receipts; two-currency `totalAssets()` |
 | `SigmaMath` (`hook.math()`) | Stateless calculation/view helper, immutable and without custody | Band, price, position and liquidity calculations |
@@ -91,85 +92,98 @@ The live SHK contract inherits OpenZeppelin ERC-20, rejects `transfer(address(0)
 
 `receive()` accepts only the PoolManager or the once-configured `WETH` source. `accountedNative` tracks native deposits, manager receipts, payments and refunds. `rescueStrayETH()` is owner-only and sends only `address(this).balance - accountedNative` to the current owner; the owner cannot rescue native pool principal, claims, fee reserves or emergency withdrawal assets.
 
-## Deployment parameters
+## Factory deployment and CREATE2 parameters
 
-Constructor: `(IPoolManager manager_, address owner_, address launchToken_, address factory_)`, all nonzero; the manifest fills them as `$poolManager`, `$owner`, `$token`, `$factory`. Ownership is assigned to `owner_`, never the deploying factory. The constructor also deploys `SigmaMath` and `PermanentTokenLock` and fills the preset table; it makes no external calls. CREATE2 hook bits are `0x1040`; mine the salt for the final creation code with `script/MineSalt.s.sol` as described in the next section, since any code change changes the CREATE2 hash. The runtime is within 200 bytes of the EIP-170 limit (24,376 of 24,576 bytes with the pinned compiler settings); any further addition to the hook needs a corresponding removal or a move into `SigmaMath`.
+[`src/DeployFactory.sol`](src/DeployFactory.sol) takes **no constructor arguments**. Its initial OpenZeppelin `Ownable` owner is explicitly `0xdbeab8243F318F1bBF815d85a8A869def1510b61`, regardless of who deploys it. Both `deployHook` and `createPool` are owner-only. Restricting deployment prevents another caller from consuming the recorded salt first. The factory records its own successful hook deployments and refuses pool creation for unknown hooks.
+
+`deployHook(bytes32 salt,address manager,address owner,address token)` executes CREATE2 **in the factory** and returns the new hook address. It supplies exactly `(manager, owner, token, address(this))` to the unchanged `SigmaHook` constructor. The hook owner is independent of the factory owner. Constructor errors bubble up; a duplicate salt/init-code combination reverts without affecting the existing hook. `HookDeployed` records the hook, salt, owner, manager and token.
+
+The hook's creation code is 32,956 bytes, so embedding `new SigmaHook` in the factory's runtime would exceed EIP-170's 24,576-byte limit. The factory constructor instead stores that exact code in two immutable, STOP-prefixed code stores using the already-vendored SSTORE2 library. They are created internally during Tx 1, require no separate transactions, and have no callable mutation or destruction path. At deployment the factory reads both pieces, appends the constructor arguments and executes CREATE2 itself. There is no proxy, delegatecall or external bytecode supplier. The deployed factory runtime is **2,227 bytes**, its creation code is **35,823 bytes** (below EIP-3860's 49,152 bytes), and each code store is **16,479 bytes**. The hook runtime remains **24,376 bytes**, leaving 200 bytes of EIP-170 headroom.
+
+The factory address is determined by regular CREATE from the supplied EOA at nonce **2**, independent of factory bytecode:
+
+```text
+RLP: 0xd694dbeab8243f318f1bbf815d85a8a869def1510b6102
+FACTORY_ADDRESS = keccak256(RLP)[12:]
+```
+
+This was computed offline with `cast compute-address 0xdbeab8243F318F1bBF815d85a8A869def1510b61 --nonce 2`, reproduced by `MineSalt.factoryAddress()`, and tested against an actual local CREATE from that EOA at nonce 2. Internal code-store deployments use the factory's nonce and do not consume additional EOA nonces.
+
+| Parameter | Value | Source |
+| --- | --- | --- |
+| EOA creating factory / initial factory owner | `0xdbeab8243F318F1bBF815d85a8A869def1510b61` | This brief |
+| EOA nonce for factory CREATE | `2` | This brief; not a live nonce check |
+| CREATE2 deployer / hook `factory_` | `0x44aa80c4F3807C0b5A2c880158E0141A9553e199` | Derived from EOA and nonce |
+| Hook `manager_` | `0x8366a39CC670B4001A1121B8F6A443A643e40951` | This brief |
+| Hook `owner_` | `0xdbeab8243F318F1bBF815d85a8A869def1510b61` | This brief |
+| Hook `launchToken_` / existing SHK | `0x4fE865Ad3b3eF64B2af9C38c78aBf5C6e68C1164` | This brief |
+| Chain | Robinhood, `4663` | Context only; no RPC queried |
+| Build | Solidity 0.8.26, Cancun, via-IR, optimizer 200 runs, no bytecode metadata hash | Unchanged `foundry.toml` |
 
 ## CREATE2 salt mining
 
-`script/MineSalt.s.sol` finds the salt that places the hook at an address ending in `0x1040`. It is offline and read-only: no RPC, no environment variables, no broadcast, no FFI. Every input is either a constant in the script or a function argument.
+`script/MineSalt.s.sol` runs locally with constants or function arguments. It needs no key, RPC, environment reads, FFI or broadcast. The CREATE2 address is `keccak256(0xff ‖ deployer ‖ salt ‖ keccak256(initCode))[12:]`; `initCode` is the hook creation code followed by `abi.encode(manager, owner, token, factory)`.
 
-A CREATE2 address is `keccak256(0xff ‖ deployer ‖ salt ‖ keccak256(initCode))[12:]`, and `initCode` is the compiled creation code of `SigmaHook` followed by the ABI-encoded constructor arguments. The salt therefore depends on all of: the deployer, the compiled bytecode and the four constructor values. The deployer alone does not determine it.
+The search requires the low **16 bits** to equal `0x1040`. This is stricter than v4's low-14-bit permission check, and yields exactly `afterInitialize | afterSwap`. It returns the lowest salt in the requested window or reverts `SearchExhausted`. The window below is `[0, 4194304)`.
 
-| Input | Value in the script | Source |
-| --- | --- | --- |
-| Deployer (executes CREATE2) | `0x735121A546092F31050A867FD7E3A750C7B0EFF9` | the brief |
-| `factory_` constructor argument | same as the deployer | assumption: the contract that runs CREATE2 is the launch factory that later binds the pool |
-| `manager_` | `0x8366a39CC670B4001A1121B8F6A443A643e40951` | pinned project input, Robinhood Chain 4663 |
-| `launchToken_` | `0x4fE865Ad3b3eF64B2af9C38c78aBf5C6e68C1164` | pinned project input, the existing SHK token |
-| `owner_` | `0xdbeab8243F318F1bBF815d85a8A869def1510b61` (`OWNER`) | the requester's follow-up brief; `mineFor(<owner>)` overrides it |
-| Required address suffix | low 16 bits `== 0x1040` | the brief; implies the v4 flags `afterInitialize ‖ afterSwap` |
-
-Uniswap v4 validates only the low 14 bits of a hook address, so `0x5040`, `0x9040` and `0xD040` endings would also pass `validateHookPermissions`. The brief asks for an address that ends in `0x1040`, so the search requires the full low 16 bits, which is stricter and takes about 65,536 attempts on average (around 7M gas in the simulation). The window is `2^22` attempts, which fails with probability e^-64; a failed window reverts `SearchExhausted`, never returns a wrong salt.
-
-Run, with the hook owner's address (the bare `forge script script/MineSalt.s.sol` is the same search for the recorded `OWNER`):
+Reproduce the requested full-argument search:
 
 ```sh
 forge build
-forge script script/MineSalt.s.sol --sig "mineFor(address)" 0xdbeab8243F318F1bBF815d85a8A869def1510b61
+forge script script/MineSalt.s.sol \
+  --sig "mineWith(address,address,address,address,address,uint256,uint256)" \
+  0x44aa80c4F3807C0b5A2c880158E0141A9553e199 \
+  0x8366a39CC670B4001A1121B8F6A443A643e40951 \
+  0xdbeab8243F318F1bBF815d85a8A869def1510b61 \
+  0x4fE865Ad3b3eF64B2af9C38c78aBf5C6e68C1164 \
+  0x44aa80c4F3807C0b5A2c880158E0141A9553e199 0 4194304
+forge script script/MineSalt.s.sol --sig "verifyRecorded()"
 ```
 
 ### Recorded result
 
-Output of that command for the creation code built from this commit, also stored in [`docs/create2-salt.json`](docs/create2-salt.json) and as the `RECORDED_*` constants of the script:
-
-```
-SALT: 0x00000000000000000000000000000000000000000000000000000000000075db
-ADDRESS: 0x0E19960828C6f198713e97C0039D589a5b0f1040
-INIT_CODE_HASH: 0xad1d60e3f24ffe14b9ec5816c251dcdd918e6f52b5c441024b1b1f58ca49cb96
-DEPLOYER: 0x735121A546092F31050A867FD7E3A750C7B0EFF9
-CONSTRUCTOR manager: 0x8366a39CC670B4001A1121B8F6A443A643e40951
-CONSTRUCTOR owner: 0xdbeab8243F318F1bBF815d85a8A869def1510b61
-CONSTRUCTOR launchToken: 0x4fE865Ad3b3eF64B2af9C38c78aBf5C6e68C1164
-CONSTRUCTOR factory: 0x735121A546092F31050A867FD7E3A750C7B0EFF9
+```text
+FACTORY_ADDRESS: 0x44aa80c4F3807C0b5A2c880158E0141A9553e199
+HOOK_SALT: 0x000000000000000000000000000000000000000000000000000000000001762c
+HOOK_ADDRESS: 0xB259cb6965FD49df82a415920Ac61DF370cB1040
+INIT_CODE_HASH: 0xd09c16e2448f647d24add8afafe9f5e94196ab26a56d0592ff129a016827aa3c
 ```
 
-The salt is the lowest that works (`0x75db` = 30,171 attempts; the tests prove every lower salt fails). It is valid only for this exact creation code, these four constructor values and this deployer: any change to the hook source, its imports, the compiler settings or an argument changes `INIT_CODE_HASH` and voids the salt. Before the deployment transaction, check that the build at hand still produces the recorded result:
+[`docs/create2-salt.json`](docs/create2-salt.json) records the same result, parameters, derivation, commands and sequence. This record **supersedes the previous salt mined for `0x735121A546092F31050A867FD7E3A750C7B0EFF9`**. The new salt is decimal 95,788; the search checks 95,789 candidates including zero. Tests prove every lower salt fails and that the production factory really deploys the hook at the recorded address.
 
-```sh
-forge script script/MineSalt.s.sol --sig "verifyRecorded()"
-```
+`verifyRecorded()` recomputes the factory address, hook init-code hash and CREATE2 prediction. It reverts `ResultStale` or `AddressMismatch` when they disagree with the record. It checks local bytecode, not live chain state. A change to the EOA nonce, hook creation code, compiler settings or any hook constructor argument requires re-mining and refreshing the script's `RECORDED_*` constants, tests and recorded documentation together. The bare `run()` and `mineFor(OWNER)` now use this nonce-2 factory; `mineFor(otherOwner)` changes only the hook owner. The factory's initial owner stays fixed.
 
-It prints the three verified values, or reverts `ResultStale(recordedHash, currentHash)` when the creation code or arguments changed, or `AddressMismatch` when the salt no longer maps to the recorded address. After a change, re-run the mining command and refresh the `RECORDED_*` constants, `docs/create2-salt.json` and this section together; `test/MineSalt.t.sol` fails until they agree with the build.
+## DEPLOY_SEQUENCE
 
-A signing key is never needed; the script reads nothing from it and sends nothing. The full form overrides every constant for another deployer, another owner, another chain or a resumed search:
+All five main operations are signed by `0xdbeab8243F318F1bBF815d85a8A869def1510b61`. Nothing was broadcast by this assignment.
 
-```sh
-forge script script/MineSalt.s.sol \
-  --sig "mineWith(address,address,address,address,address,uint256,uint256)" \
-  <deployer> <poolManager> <owner> <launchToken> <factory> <startSalt> <attempts>
-```
+1. **Tx 1 — EOA nonce 2:** deploy `src/DeployFactory.sol:DeployFactory` with regular CREATE and no constructor arguments. Expect factory `0x44aa80c4F3807C0b5A2c880158E0141A9553e199`. Using a CREATE2 deployment service instead would give a different factory address and invalidate this record.
+2. **Tx 2 — to factory:** `deployHook(0x000000000000000000000000000000000000000000000000000000000001762c, 0x8366a39CC670B4001A1121B8F6A443A643e40951, 0xdbeab8243F318F1bBF815d85a8A869def1510b61, 0x4fE865Ad3b3eF64B2af9C38c78aBf5C6e68C1164)`. Check `HookDeployed` and the returned hook `0xB259cb6965FD49df82a415920Ac61DF370cB1040`.
+3. **Tx 3 — to factory:** `createPool(0xB259cb6965FD49df82a415920Ac61DF370cB1040, 0x0000000000000000000000000000000000000000, 0x4fE865Ad3b3eF64B2af9C38c78aBf5C6e68C1164)`. Zero here is the defined **native ETH currency sentinel**. The factory calls the hook's manager with `PoolKey(ETH, SHK, 12500, 60, hook)`. It rejects invalid ordering, a missing launch token, an already-bound hook and a manager that returns without initializing the hook.
+4. **Tx 4 — to hook:** first LP calls `deposit(ethBudget, shkBudget, minShares, receiver, deadline)` with **`msg.value = ethBudget`**. Read `poolKey()`, the initialized price and a fresh `previewDeposit` quote first. The operator chooses funded budgets, the intended receipt receiver, a positive slippage minimum and a deadline. Unused native budget is refunded; only consumed SHK is pulled.
+5. **Tx 5 — to hook:** `setMode(1)` selects **STANDARD** (`triggerSigma=15`, `rangeSigma=20`, `cooldown=1800`). This changes live parameters; it does not immediately move the existing position.
 
-Operational rules for whoever deploys:
+**SHK approval prerequisite:** the EOA must already have enough SHK allowance to the predicted hook before step 4. If it does not, send an additional `SHK.approve(hook, shkBudget)` transaction between steps 3 and 4. The list above describes the five requested main operations, not a guarantee of only five transactions. Without a prior allowance the actual EOA nonces are factory 2, hook deployment 3, pool creation 4, approval 5, deposit 6, mode 7. **Do not use nonce 2 for the approval.** The factory cannot approve tokens held by the EOA, and the existing token is never redeployed or re-minted.
 
-- **Deployer identity.** `DEPLOYER` must be the account whose `CREATE2` opcode runs: the factory contract, not the EOA signing the transaction and not a transient script contract. If `0x7351…EFF9` is an EOA, it cannot deploy with CREATE2 at all; mine with the factory it will call.
-- **Exact arguments.** Pass to CREATE2 the bytes printed as `INIT_CODE_HASH`'s preimage: the `SigmaHook.sol/SigmaHook.json` artifact's creation code in Foundry's output directory (`out/` by default) built from this commit with the pinned settings (solc 0.8.26, via-IR, 200 runs, Cancun, no metadata hash) plus `abi.encode(manager, owner, launchToken, factory)` with exactly the values printed. A different compiler, setting, owner, manager, token or factory yields a different address, which the hook constructor then rejects with `HookAddressNotValid` if its flags no longer match.
-- **Address must be empty.** This repository does not query the chain. Before deploying, confirm `0x0E19960828C6f198713e97C0039D589a5b0f1040` has no code on Robinhood Chain; if it is occupied, re-run with `mineWith` and a `startSalt` of `0x75dc` (one above the recorded salt).
-- **Owner identity.** `0xdbeab8243F318F1bBF815d85a8A869def1510b61` becomes the hook's `Ownable2Step` owner with the parameter setters, pause and the irreversible emergency exit. It is taken from the brief as given, unverified; if the launch names a different owner, mine again with `mineFor(<owner>)` because the address moves with it.
-- **Pinned inputs, not verified addresses.** The PoolManager and token constants are the project's recorded inputs. Confirm them against the live chain before the deployment transaction; if either differs, mine again with `mineWith`.
-- **Nothing is deployed here.** The script, its tests and this document authorise no transaction. Deployment and the pool binding remain the launch's responsibility, after the independent review.
+Pool creation is owner-gated, but deposits become permissionless as soon as the pool is initialized. The sequence does not reserve the first LP slot for the EOA; the operator should quote the actual current state before depositing.
 
-Factory-only initialization binds one pool permanently. Required pool fee is 12,500 pips (1.25%), spacing is 60, one currency must be the immutable launch token, and the other may be native ETH or a standard ERC-20. There is no pool reassignment or upgrade.
+## Manager compatibility and operational responsibilities
 
-Pinned project inputs identify Robinhood Chain, chain ID **4663**, with the existing SHK token `0x4fe865ad3b3ef64b2af9c38c78abf5c6e68c1164`, the immutable Sprint 1 hook `0xcc0551d738d964a2d68ac3674e7fe4a2e69f1040` and PoolManager `0x8366a39cc670b4001a1121b8f6a443a643e40951`. These are input records, not newly verified on-chain addresses. No transactions, deployment, migration, or token mint were performed by this assignment. Updating source cannot patch an immutable live hook: a new hook and pool must be deployed and reviewed, and existing LPs migrate voluntarily. Holders of v1 wrapper shares redeem them on the v1 wrapper for v1 receipts and exit the v1 hook; v2 has no wrapper to migrate into.
+The brief explicitly requires `poolManager.createPool(PoolKey)`. The protected vendored upstream `IPoolManager` instead exposes `initialize(PoolKey,uint160)`. `ICreatePoolManager` declares the requested extension without changing any dependency. The factory invokes **only `createPool((address,address,uint24,int24,address))`** on the manager read from the hook. It supplies no guessed price and has no fallback to upstream `initialize`.
 
-The network input marks `extendedSwapParams: true`, while the vendored core uses upstream three-field `SwapParams`. Local tests establish correctness against the vendored ABI only; the operator must verify the target manager's swap/callback ABI before deploying.
+The deployment operator must confirm that the supplied manager implements that extension, chooses an acceptable initial price, forwards the factory as the `afterInitialize` sender, and supports the hook's remaining swap/callback ABI. An upstream-only manager makes this factory's `createPool` revert. The local test adapter adds `createPool` over the real upstream manager using a fixture-only 1:1 price; it proves the factory call, caller identity, pool binding, deposit and exit flow, **not live-chain ABI or price compatibility**. No such adapter is deployed in production.
+
+The operator must also confirm the EOA still has nonce 2, the predicted factory and hook addresses are unused, the manager and existing SHK addresses match the intended chain, and Cancun opcodes and transaction gas limits are supported. These are supplied assumptions, not checks completed offline. Verify source and constructor arguments before inviting liquidity. Re-run `verifyRecorded()` on the exact build to be deployed.
+
+The factory owner may deploy more hooks, choose each hook's manager/owner/token, create a valid pool once per hook, transfer factory ownership with standard one-step `transferOwnership`, or renounce it. Renunciation permanently disables both factory operations, so must not happen before pool creation. Factory ownership grants no hook parameter, withdrawal or upgrade authority; hook ownership uses the existing separate `Ownable2Step` flow. The factory does not hold LP funds or provide a generic arbitrary-call interface. The code stores and hook factory binding cannot be changed.
+
+Pinned project inputs identify the immutable Sprint 1 hook `0xcc0551d738d964a2d68ac3674e7fe4a2e69f1040`. It and the existing token remain unchanged on chain. A new hook and pool need review, and existing LPs migrate voluntarily. The project's prior network notes mention an extended swap ABI, while the vendored core uses upstream three-field `SwapParams`; actual-chain compatibility remains the operator's responsibility. Independent adversarial review is still required before public capital.
 
 ## After launch
 
 - **Mode:** the hook starts at the v1 defaults (15 / 30 / 1800). The owner calls `setMode(m)` with the preset that matches the intended risk posture, or the individual setters within their bounds. `pause()` stops keeper rebalances without touching the range or cooldown; `resume()` restores the 1.5σ trigger. No value here is secret or external: the owner picks it.
 - **Optional WETH source:** owner calls `setWETH(verifiedWrappedEtherAddress)` once, only if WETH-source ETH reception is needed. The supplied network inputs contain no WETH address, so none is invented. Until configured, only the PoolManager may send ETH through `receive()`.
-- **Salt:** recorded for owner `0xdbeab8243F318F1bBF815d85a8A869def1510b61` as salt `0x…75db`, address `0x0E19960828C6f198713e97C0039D589a5b0f1040`, init code hash `0xad1d…cb96` (see [Recorded result](#recorded-result) and `docs/create2-salt.json`). Run `forge script script/MineSalt.s.sol --sig "verifyRecorded()"` on the build you deploy, confirm the address is empty on chain, and deploy from `0x735121A546092F31050A867FD7E3A750C7B0EFF9` with exactly the recorded constructor values. Re-mine after any change to the hook source, compiler settings or arguments.
+- **Salt:** use the nonce-2 factory and the exact [recorded result](#recorded-result). Run `forge script script/MineSalt.s.sol --sig "verifyRecorded()"` on the deployment build. Re-mine after any change to factory address, hook creation code, compiler settings or hook arguments.
 - **Operator:** verify constructor arguments, hook flags, `poolKey()`, `math()` and `burnSink()`; verify Cancun and manager ABI compatibility, factory initialization, fee/spacing and currency order. Publish the new hook address separately from the historical deployment. Never redeploy or re-mint SHK.
 - **Keepers:** read `triggerSigma()`, `rangeSigma()`, `cooldown()` and `lastRebalance()` rather than assuming constants; simulate `flashRebalance(key)` and submit when eligible. Gas is the keeper's expense; the 1% bounty does not guarantee profit. Monitor `ModeChanged`, `InvestmentDeferred` and `BuybackDeferred`.
 - **Owner:** operate the two-step ownership transfer, the parameter setters and the irreversible emergency exit, and rescue only stray ETH. Emergency activation collects all pool assets, cancels unexecuted fee allocations back to LPs, and pays the owner nothing; thereafter holders redeem raw assets without the manager.

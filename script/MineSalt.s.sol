@@ -35,11 +35,12 @@ contract MineSalt is Script {
     /// @dev The salt does not put the given init code at the expected address for this deployer.
     error AddressMismatch(address expected, address actual);
 
-    /// @notice CREATE2 deployer from the brief. It is the contract that executes CREATE2, so it is also
-    /// the hook's `factory_` constructor argument (the only caller allowed to bind the pool).
-    address public constant DEPLOYER = 0x735121A546092F31050A867FD7E3A750C7B0EFF9;
+    /// @notice DeployFactory, created by OWNER at nonce 2. It executes CREATE2 and is also the
+    /// hook's `factory_` constructor argument (the only caller allowed to bind the pool).
+    address public constant DEPLOYER = 0x44aa80c4F3807C0b5A2c880158E0141A9553e199;
     /// @notice Hook owner given by the requester for this search (`owner_` constructor argument).
     address public constant OWNER = 0xdbeab8243F318F1bBF815d85a8A869def1510b61;
+    uint256 public constant FACTORY_NONCE = 2;
     /// @notice Uniswap v4 PoolManager on Robinhood Chain (chain id 4663), from the pinned project inputs.
     IPoolManager public constant POOL_MANAGER = IPoolManager(0x8366a39CC670B4001A1121B8F6A443A643e40951);
     /// @notice Existing SHK launch token on Robinhood Chain, from the pinned project inputs. Never redeployed.
@@ -58,10 +59,16 @@ contract MineSalt is Script {
     /// @notice Result of `mineFor(OWNER)` for the creation code built from this repository with the pinned
     /// settings (solc 0.8.26, via-IR, 200 runs, Cancun, no metadata hash) and the constants above. Any
     /// change to the hook source, its imports, the compiler settings or the arguments voids all three.
-    bytes32 public constant RECORDED_SALT = 0x00000000000000000000000000000000000000000000000000000000000075db;
-    address public constant RECORDED_ADDRESS = 0x0E19960828C6f198713e97C0039D589a5b0f1040;
+    bytes32 public constant RECORDED_SALT = 0x000000000000000000000000000000000000000000000000000000000001762c;
+    address public constant RECORDED_ADDRESS = 0xB259cb6965FD49df82a415920Ac61DF370cB1040;
     bytes32 public constant RECORDED_INIT_CODE_HASH =
-        0xad1d60e3f24ffe14b9ec5816c251dcdd918e6f52b5c441024b1b1f58ca49cb96;
+        0xd09c16e2448f647d24add8afafe9f5e94196ab26a56d0592ff129a016827aa3c;
+
+    /// @notice RLP([OWNER, 2]) = 0xd6 ++ 0x94 ++ OWNER ++ 0x02 (23 bytes total).
+    /// @dev This encoding is deliberately specific to the brief's nonce, not a general RLP encoder.
+    function factoryAddress() public pure returns (address) {
+        return address(uint160(uint256(keccak256(abi.encodePacked(hex"d694", OWNER, uint8(FACTORY_NONCE))))));
+    }
 
     /// @notice The bare invocation: mine for the requester's owner with every other input from the constants.
     function run() external pure returns (bytes32 salt, address predicted) {
@@ -77,8 +84,11 @@ contract MineSalt is Script {
     /// Reverts `ResultStale` when the creation code or arguments changed and `AddressMismatch` when the salt
     /// no longer maps to the address; returns the address when everything agrees.
     function verifyRecorded() external pure returns (address) {
+        address factory = factoryAddress();
+        if (factory != DEPLOYER) revert AddressMismatch(DEPLOYER, factory);
         bytes32 hash = initCodeHash(POOL_MANAGER, OWNER, LAUNCH_TOKEN, DEPLOYER);
         address predicted = check(DEPLOYER, hash, RECORDED_INIT_CODE_HASH, RECORDED_SALT, RECORDED_ADDRESS);
+        console.log("VERIFIED FACTORY_ADDRESS:", vm.toString(factory));
         console.log("VERIFIED SALT:", vm.toString(RECORDED_SALT));
         console.log("VERIFIED ADDRESS:", vm.toString(predicted));
         console.log("VERIFIED INIT_CODE_HASH:", vm.toString(hash));

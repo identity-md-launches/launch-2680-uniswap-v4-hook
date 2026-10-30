@@ -12,14 +12,14 @@ import {IHooks} from "v4-core/src/interfaces/IHooks.sol";
 
 /// @notice The salt tool is judged against the real artifact and a real CREATE2 from the brief's deployer.
 contract MineSaltTest is Test {
-    address internal constant BRIEF_DEPLOYER = 0x735121A546092F31050A867FD7E3A750C7B0EFF9;
+    address internal constant BRIEF_DEPLOYER = 0x44aa80c4F3807C0b5A2c880158E0141A9553e199;
     address internal constant BRIEF_MANAGER = 0x8366a39CC670B4001A1121B8F6A443A643e40951;
     address internal constant BRIEF_TOKEN = 0x4fE865Ad3b3eF64B2af9C38c78aBf5C6e68C1164;
     /// @dev Hook owner the requester gave for the recorded search, and the three values it produced.
     address internal constant BRIEF_OWNER = 0xdbeab8243F318F1bBF815d85a8A869def1510b61;
-    bytes32 internal constant BRIEF_SALT = bytes32(uint256(0x75db));
-    address internal constant BRIEF_ADDRESS = 0x0E19960828C6f198713e97C0039D589a5b0f1040;
-    bytes32 internal constant BRIEF_INIT_CODE_HASH = 0xad1d60e3f24ffe14b9ec5816c251dcdd918e6f52b5c441024b1b1f58ca49cb96;
+    bytes32 internal constant BRIEF_SALT = bytes32(uint256(0x1762c));
+    address internal constant BRIEF_ADDRESS = 0xB259cb6965FD49df82a415920Ac61DF370cB1040;
+    bytes32 internal constant BRIEF_INIT_CODE_HASH = 0xd09c16e2448f647d24add8afafe9f5e94196ab26a56d0592ff129a016827aa3c;
     uint256 internal constant ATTEMPTS = 1 << 22;
 
     MineSalt internal miner;
@@ -52,6 +52,9 @@ contract MineSaltTest is Test {
 
     function test_constantsMatchBriefAndHookPermissions() public view {
         assertEq(miner.DEPLOYER(), BRIEF_DEPLOYER);
+        assertEq(miner.factoryAddress(), vm.computeCreateAddress(BRIEF_OWNER, 2));
+        assertEq(miner.factoryAddress(), BRIEF_DEPLOYER);
+        assertEq(miner.FACTORY_NONCE(), 2);
         assertEq(miner.OWNER(), BRIEF_OWNER);
         assertEq(miner.RECORDED_SALT(), BRIEF_SALT);
         assertEq(miner.RECORDED_ADDRESS(), BRIEF_ADDRESS);
@@ -121,7 +124,9 @@ contract MineSaltTest is Test {
             miner.initCode(IPoolManager(BRIEF_MANAGER), BRIEF_OWNER, BRIEF_TOKEN, BRIEF_DEPLOYER), BRIEF_SALT
         );
         assertEq(
-            deployed, BRIEF_ADDRESS, "CREATE2 from 0x7351...EFF9 with the recorded salt lands on the recorded address"
+            deployed,
+            BRIEF_ADDRESS,
+            "CREATE2 from the nonce-2 factory with the recorded salt lands on the recorded address"
         );
         SigmaHook hook = SigmaHook(payable(deployed));
         assertEq(hook.owner(), BRIEF_OWNER);

@@ -1,24 +1,28 @@
 {
-  "job": "Mine CREATE2 salt for SigmaHook",
-  "command": "forge script script/MineSalt.s.sol --sig \"mineFor(address)\" 0xdbeab8243F318F1bBF815d85a8A869def1510b61",
+  "job": "Factory + re-mine salt for SigmaHook",
+  "command": "forge script script/MineSalt.s.sol --sig \"mineWith(address,address,address,address,address,uint256,uint256)\" 0x44aa80c4F3807C0b5A2c880158E0141A9553e199 0x8366a39CC670B4001A1121B8F6A443A643e40951 0xdbeab8243F318F1bBF815d85a8A869def1510b61 0x4fE865Ad3b3eF64B2af9C38c78aBf5C6e68C1164 0x44aa80c4F3807C0b5A2c880158E0141A9553e199 0 4194304",
   "verify": "forge script script/MineSalt.s.sol --sig \"verifyRecorded()\"",
   "result": {
-    "SALT": "0x00000000000000000000000000000000000000000000000000000000000075db",
-    "ADDRESS": "0x0E19960828C6f198713e97C0039D589a5b0f1040",
-    "INIT_CODE_HASH": "0xad1d60e3f24ffe14b9ec5816c251dcdd918e6f52b5c441024b1b1f58ca49cb96"
+    "FACTORY_ADDRESS": "0x44aa80c4F3807C0b5A2c880158E0141A9553e199",
+    "HOOK_SALT": "0x000000000000000000000000000000000000000000000000000000000001762c",
+    "HOOK_ADDRESS": "0xB259cb6965FD49df82a415920Ac61DF370cB1040",
+    "INIT_CODE_HASH": "0xd09c16e2448f647d24add8afafe9f5e94196ab26a56d0592ff129a016827aa3c"
   },
   "create2": {
-    "deployer": "0x735121A546092F31050A867FD7E3A750C7B0EFF9",
+    "deployer": "0x44aa80c4F3807C0b5A2c880158E0141A9553e199",
     "formula": "keccak256(0xff ++ deployer ++ salt ++ keccak256(initCode))[12:]",
     "initCode": "SigmaHook creation code from the SigmaHook.sol/SigmaHook.json artifact in Foundry's output directory, built at this commit ++ abi.encode(manager, owner, launchToken, factory)",
     "requiredSuffix": "0x1040",
-    "hookFlags": ["afterInitialize", "afterSwap"]
+    "hookFlags": [
+      "afterInitialize",
+      "afterSwap"
+    ]
   },
   "constructorArgs": {
     "manager_": "0x8366a39CC670B4001A1121B8F6A443A643e40951",
     "owner_": "0xdbeab8243F318F1bBF815d85a8A869def1510b61",
     "launchToken_": "0x4fE865Ad3b3eF64B2af9C38c78aBf5C6e68C1164",
-    "factory_": "0x735121A546092F31050A867FD7E3A750C7B0EFF9"
+    "factory_": "0x44aa80c4F3807C0b5A2c880158E0141A9553e199"
   },
   "build": {
     "solc": "0.8.26",
@@ -33,6 +37,87 @@
     "chainId": 4663,
     "note": "Context only: CREATE2 addresses do not depend on the chain id. The address was not checked for existing code on chain; the deployer must do so before sending the transaction."
   },
-  "validity": "The salt is valid only for this exact creation code and these exact four constructor values from this deployer. Any change to the hook source, its imports, the compiler settings or an argument changes INIT_CODE_HASH and voids the salt; re-run the command and verifyRecorded() reverts ResultStale until the recorded values are refreshed.",
-  "deployed": false
+  "validity": "This record supersedes the older EOA/deployer salt. The hook salt is bound to the exact compiled SigmaHook init code, four constructor arguments and factory address. A different EOA nonce changes the factory address and requires re-mining. Changes to hook code, its imports or compiler settings require re-mining and refreshing this record and RECORDED_* constants.",
+  "deployed": false,
+  "factory": {
+    "contract": "src/DeployFactory.sol:DeployFactory",
+    "constructorArgs": [],
+    "owner": "0xdbeab8243F318F1bBF815d85a8A869def1510b61",
+    "createSender": "0xdbeab8243F318F1bBF815d85a8A869def1510b61",
+    "createNonce": 2,
+    "rlpPreimage": "0xd694dbeab8243f318f1bbf815d85a8a869def1510b6102",
+    "formula": "keccak256(rlp([createSender, createNonce]))[12:]",
+    "address": "0x44aa80c4F3807C0b5A2c880158E0141A9553e199",
+    "runtimeBytes": 2227,
+    "creationCodeBytes": 35823,
+    "codeStorage": "Two immutable STOP-prefixed stores deployed internally during factory construction; the factory itself executes CREATE2."
+  },
+  "pool": {
+    "manager": "0x8366a39CC670B4001A1121B8F6A443A643e40951",
+    "entrypoint": "createPool((address,address,uint24,int24,address))",
+    "currency0": "0x0000000000000000000000000000000000000000",
+    "currency0Meaning": "Native ETH currency sentinel, not a missing address",
+    "currency1": "0x4fE865Ad3b3eF64B2af9C38c78aBf5C6e68C1164",
+    "fee": 12500,
+    "tickSpacing": 60,
+    "hooks": "0xB259cb6965FD49df82a415920Ac61DF370cB1040",
+    "initialPrice": "Chosen by the manager createPool extension; not assumed or set by this factory. Offline tests use a test-only adapter."
+  },
+  "DEPLOY_SEQUENCE": [
+    {
+      "step": 1,
+      "from": "0xdbeab8243F318F1bBF815d85a8A869def1510b61",
+      "nonce": 2,
+      "action": "Regular CREATE of DeployFactory, with no constructor arguments",
+      "expectedAddress": "0x44aa80c4F3807C0b5A2c880158E0141A9553e199"
+    },
+    {
+      "step": 2,
+      "from": "0xdbeab8243F318F1bBF815d85a8A869def1510b61",
+      "to": "0x44aa80c4F3807C0b5A2c880158E0141A9553e199",
+      "function": "deployHook(bytes32,address,address,address)",
+      "args": [
+        "0x000000000000000000000000000000000000000000000000000000000001762c",
+        "0x8366a39CC670B4001A1121B8F6A443A643e40951",
+        "0xdbeab8243F318F1bBF815d85a8A869def1510b61",
+        "0x4fE865Ad3b3eF64B2af9C38c78aBf5C6e68C1164"
+      ]
+    },
+    {
+      "step": 3,
+      "from": "0xdbeab8243F318F1bBF815d85a8A869def1510b61",
+      "to": "0x44aa80c4F3807C0b5A2c880158E0141A9553e199",
+      "function": "createPool(address,address,address)",
+      "args": [
+        "0xB259cb6965FD49df82a415920Ac61DF370cB1040",
+        "0x0000000000000000000000000000000000000000",
+        "0x4fE865Ad3b3eF64B2af9C38c78aBf5C6e68C1164"
+      ]
+    },
+    {
+      "step": 4,
+      "from": "0xdbeab8243F318F1bBF815d85a8A869def1510b61",
+      "to": "0xB259cb6965FD49df82a415920Ac61DF370cB1040",
+      "function": "deposit(uint256,uint256,uint256,address,uint256)",
+      "guidance": "First LP. Choose ETH/SHK budgets, positive minShares, receiver and deadline from a fresh previewDeposit quote. Send exactly the ETH budget as msg.value. SHK allowance from the EOA to the hook must cover the consumed token amount."
+    },
+    {
+      "step": 5,
+      "from": "0xdbeab8243F318F1bBF815d85a8A869def1510b61",
+      "to": "0xB259cb6965FD49df82a415920Ac61DF370cB1040",
+      "function": "setMode(uint8)",
+      "args": [
+        1
+      ],
+      "meaning": "STANDARD: triggerSigma=15, rangeSigma=20, cooldown=1800"
+    }
+  ],
+  "approvalPrerequisite": "Check the EOA-to-hook SHK allowance before step 4. If insufficient, the EOA must send a separate token approve(hook, tokenBudget) transaction after the nonce-2 factory deployment and before deposit. That is an extra transaction beyond the five main operations; do not consume nonce 2 with approval.",
+  "assumptions": [
+    "The supplied EOA still has nonce 2 for the factory CREATE transaction. The computation is offline, not a live nonce check.",
+    "The supplied manager and token addresses are correct and the target chain supports Cancun.",
+    "The manager implements createPool(PoolKey), forwards the factory as afterInitialize sender, and has an acceptable initial-price policy. The vendored upstream manager only implements initialize(PoolKey,uint160); no automatic fallback or price is supplied.",
+    "The manager swap/callback ABI is compatible with the existing SigmaHook.",
+    "Both predicted deployment addresses are unused on the target chain; this was not checked offline."
+  ]
 }
